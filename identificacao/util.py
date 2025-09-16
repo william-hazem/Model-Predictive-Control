@@ -12,6 +12,30 @@ def carregar_dados(path: str):
     }
     return formated
 
+def extract_range(x : dict, r):
+    start = r[0]
+    end = r[1]
+    for key in x.keys():
+        xr = x[key][start:end]
+    return xr
+
+def plot_sinal(dados, range=None, f = None, xlabel="", ylabel="", label=""):
+    """
+        Plota um sinal de um processo
+    """
+    y = dados
+    if not range is None:
+        y = extract_range(y, range)
+
+    if not f is None:
+        y = f(dados)
+
+    fig, ax = plt.subplots(1, 1)
+    ax.set_ylabel(ylabel)
+    ax.set_xlabel(xlabel)
+    ax.plot(y, label=label)
+    return fig, ax
+
 def plot_pv_mv(dados, f=lambda x: x):
     """
         Plota em dois gráficos distintos a PV e a MV do processo
