@@ -6,11 +6,13 @@ import matplotlib.animation as animation
 from matplotlib.widgets import Button
 from asyncua import Client
 import sys
+import csv
 
 # --- Configurações ---
-URL = "opc.tcp://localhost:48030"
+URL = "opc.tcp://150.165.52.236:48030"
 REFRESH_RATE_MS = 2000  # Atualização do gráfico (ms)
-WINDOW_SIZE =2000       # Janela de tempo móvel (segundos) para manter no gráfico
+SAMPLE_RATE_MS = 2000
+WINDOW_SIZE = 2000      # Janela de tempo móvel (segundos) para manter no gráfico
 
 # Nodes (Mesmos IDs do seu código)
 NODE_IDS = {
@@ -45,13 +47,15 @@ class DataStore:
             self.pv2.append(pv2)
             self.mv1.append(mv1)
             self.mv2.append(mv2)
-            
-            # Limpeza automática para não pesar a memória (Janela deslizante)
-            # Remove dados mais velhos que WINDOW_SIZE + margem
-            if t > (WINDOW_SIZE + 10):
-                 # Mantém apenas os últimos pontos que cabem na janela visual
-                 # Isso é opcional, mas bom para longas durações
-                 pass 
+
+            # desliza a janela
+            index = len(self.time)
+            if index > (WINDOW_SIZE + 10):
+                self.time = self.time[10:]
+                self.pv1 = self.pv1[10:]
+                self.pv2 = self.pv2[10:]
+                self.mv1 = self.mv1[10:]
+                self.mv2 = self.mv2[10:]
 
     def get_data(self):
         # Retorna uma cópia dos dados para evitar conflito de thread no plot
@@ -67,6 +71,13 @@ async def opc_worker():
     print(f"Monitor: Tentando conectar em {URL}...")
     client = Client(url=URL)
     try:
+        csv_file = open('process_viewer.csv', mode='w', newline='')
+        fieldnames = ["Timestamp", "PV1", "PV2", "MV1", "MV2"]
+        writer = csv.DictWriter(f=csv_file, fieldnames=fieldnames)
+        
+        if csv_file.tell() == 0:
+            writer.writeheader()
+
         await client.connect()
         print("Monitor: Conectado ao OPC UA!")
         
@@ -81,12 +92,20 @@ async def opc_worker():
                     vals.append(val)
                 
                 store.add_data(vals[0], vals[1], vals[2], vals[3])
-                
+                row_data = {
+                    'Timestamp': f"{0:.2f}",
+                    'PV1': vals[0], 
+                    'PV2': vals[1],
+                    'MV1': vals[2],      # comando lido na MV1, se aplicado
+                    'MV2': vals[3]       # comando lido na MV2, se aplicado
+                }
+                writer.writerow(row_data)
+                csv_file.flush() # Força a gravação no disco
             except Exception as e:
                 print(f"Erro na leitura: {e}")
                 await asyncio.sleep(1) # Espera um pouco antes de tentar de novo
             
-            await asyncio.sleep(0.2) # Taxa de amostragem do monitor
+            await asyncio.sleep(SAMPLE_RATE_MS / 1000.0) # Taxa de amostragem do monitor
             
     except Exception as e:
         print(f"Erro de conexão no Monitor: {e}")
@@ -95,6 +114,7 @@ async def opc_worker():
             await client.disconnect()
         except:
             pass
+        csv_file.close()
         print("Monitor desconectado.")
 
 def start_background_loop(loop):
@@ -103,14 +123,14 @@ def start_background_loop(loop):
 
 # --- Interface Gráfica (Matplotlib) ---
 def start_gui():
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
     plt.subplots_adjust(bottom=0.2) # Espaço para os botões
     fig.canvas.manager.set_window_title('Monitoramento OPC UA (Visualizador)')
 
     # Estilos
     ax1.set_ylabel('Temperatura (°C)')
     ax1.grid(True, linestyle=':')
-    ax1.set_ylim(20, 70)
+    ax1.set_ylim(25, 45)
     
     ax2.set_ylabel('Comando (%)')
     ax2.set_xlabel('Tempo (s)')
@@ -147,7 +167,7 @@ def start_gui():
         l_mv2.set_data(t, mv2)
 
         # 4. Ajuste de Escala X (Janela deslizante)
-        if t[-1] > WINDOW_SIZE:
+        if len(t) > WINDOW_SIZE:
             ax1.set_xlim(t[-1] - WINDOW_SIZE, t[-1] + 2)
             ax2.set_xlim(t[-1] - WINDOW_SIZE, t[-1] + 2)
         else:
@@ -188,7 +208,9 @@ if __name__ == "__main__":
     try:
         start_gui()
     except KeyboardInterrupt:
+        print("Usuário interrompeu o processo.")
         pass
-    
+    except Exception as e:
+        print("Erro não esperado: ", e)
     monitoring = False
     print("Encerrando monitor...")
